@@ -2,7 +2,8 @@ import React from 'react';
 import { View, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Card, Text, Avatar, Badge } from '@/components/ui';
-import { colors, spacing } from '@/theme';
+import { UrgencyTag, UrgencyLevel } from '@/components/ai';
+import { colors, radius, spacing } from '@/theme';
 import { Booking, BookingStatus } from '@/types/models';
 import { formatBookingDate } from '@/utils/validation';
 
@@ -24,10 +25,18 @@ export interface BookingCardProps {
   booking: Booking;
   /** 'patient' shows the doctor; 'admin' shows the patient. */
   perspective: 'patient' | 'admin';
+  urgency?: UrgencyLevel;
+  complaintPreview?: string;
   onPress?: () => void;
 }
 
-export function BookingCard({ booking, perspective, onPress }: BookingCardProps) {
+export function BookingCard({
+  booking,
+  perspective,
+  urgency = booking.urgency,
+  complaintPreview = booking.complaintPreview ?? booking.reason,
+  onPress,
+}: BookingCardProps) {
   const assigned = booking.status === 'assigned' && !!booking.doctorName;
 
   // Primary line differs by viewer: patients care about their doctor, admins
@@ -60,8 +69,22 @@ export function BookingCard({ booking, perspective, onPress }: BookingCardProps)
             {subtitle}
           </Text>
         </View>
-        <Badge label={STATUS_LABEL[booking.status]} tone={STATUS_TONE[booking.status]} />
+        <View style={styles.tagGroup}>
+          {perspective === 'admin' && urgency && (
+            <UrgencyTag urgency={urgency} />
+          )}
+          <Badge label={STATUS_LABEL[booking.status]} tone={STATUS_TONE[booking.status]} />
+        </View>
       </View>
+
+      {/* One-line complaint preview for doctor/admin view */}
+      {perspective === 'admin' && complaintPreview ? (
+        <View style={styles.previewContainer}>
+          <Text style={styles.previewText} numberOfLines={1}>
+            {complaintPreview}
+          </Text>
+        </View>
+      ) : null}
 
       <View style={styles.metaRow}>
         <View style={styles.meta}>
@@ -93,6 +116,22 @@ const styles = StyleSheet.create({
   card: { gap: spacing.md },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   textBlock: { flex: 1, gap: 2 },
+  tagGroup: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  previewContainer: {
+    backgroundColor: colors.surfaceAlt,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+  },
+  previewText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -17,6 +17,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Screen, Text, IconButton } from '@/components/ui';
 import { colors, radius, spacing, shadows } from '@/theme';
 import { useAuth } from '@/context/AuthContext';
+import { useKeyboardAvoidance } from '@/hooks';
 import { sendMessage, sendImageMessage, subscribeToMessages, ChatMessage, markChatAsRead } from '@/services/firebase';
 
 export function ChatScreen({ route, navigation }: any) {
@@ -30,6 +31,19 @@ export function ChatScreen({ route, navigation }: any) {
   const [sending, setSending] = useState(false);
   const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const {
+    keyboardVisible,
+    androidPaddingBottom,
+    onContainerLayout,
+    keyboardAvoidingBehavior,
+    keyboardVerticalOffset,
+  } = useKeyboardAvoidance({
+    onKeyboardShow: () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    },
+  });
 
   useEffect(() => {
     // Subscribe to real-time chat messages
@@ -215,9 +229,13 @@ export function ChatScreen({ route, navigation }: any) {
       </View>
 
       <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        style={[
+          styles.container,
+          androidPaddingBottom > 0 ? { paddingBottom: androidPaddingBottom } : null,
+        ]}
+        behavior={keyboardAvoidingBehavior}
+        keyboardVerticalOffset={keyboardVerticalOffset}
+        onLayout={onContainerLayout}
       >
         {loading ? (
           <View style={styles.loadingContainer}>
@@ -233,6 +251,8 @@ export function ChatScreen({ route, navigation }: any) {
             keyExtractor={(item) => item.id}
             renderItem={renderMessageItem}
             contentContainerStyle={styles.listContent}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
@@ -265,7 +285,16 @@ export function ChatScreen({ route, navigation }: any) {
         )}
 
         {/* Input Bar */}
-        <View style={[styles.inputBar, { paddingBottom: Math.max(spacing.md, insets.bottom) }]}>
+        <View
+          style={[
+            styles.inputBar,
+            {
+              paddingBottom: keyboardVisible
+                ? spacing.sm
+                : Math.max(spacing.md, insets.bottom),
+            },
+          ]}
+        >
           <Pressable
             onPress={handleAttachImage}
             disabled={sending}
@@ -279,6 +308,9 @@ export function ChatScreen({ route, navigation }: any) {
             placeholderTextColor={colors.textTertiary}
             value={inputText}
             onChangeText={setInputText}
+            onFocus={() =>
+              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
+            }
             multiline
             maxLength={500}
             editable={!sending}

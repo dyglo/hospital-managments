@@ -1,13 +1,26 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Pressable, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen, Text, Input, Button, IconButton } from '@/components/ui';
+import {
+  SymptomCheckBar,
+  SymptomCheckState,
+  AiBubble,
+  AiReplyState,
+  AiEmergencyScreen,
+  AiPreVisitChat,
+} from '@/components/ai';
 import { colors, radius, spacing, shadows } from '@/theme';
 import { useAuth } from '@/context/AuthContext';
+import { useDoctors } from '@/hooks';
 import { createBooking, db } from '@/services/firebase';
+import {
+  StagedPhoto,
+  requestAiTriage,
+} from '@/services/ai';
 import { upcomingDays } from '@/utils/validation';
 import { firebaseErrorMessage } from '@/utils/firebaseError';
 import { PatientStackParamList } from '@/navigation/types';
@@ -20,7 +33,22 @@ const AFTERNOON_SLOTS = ['12:00', '12:30', '13:00', '13:30', '14:00', '14:30', '
 export function BookingScreen({ route, navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { profile, user } = useAuth();
-  const doctorId = route.params?.doctorId;
+  const { doctors } = useDoctors();
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string | undefined>(
+    route.params?.doctorId
+  );
+  const doctorId = selectedDoctorId;
+
+  // AI Symptom Check & Triage state
+  const [symptomText, setSymptomText] = useState('');
+  const [symptomPhotos, setSymptomPhotos] = useState<StagedPhoto[]>([]);
+  const [checkState, setCheckState] = useState<SymptomCheckState>('empty');
+  const [replyState, setReplyState] = useState<AiReplyState | null>(null);
+  const [aiReplyText, setAiReplyText] = useState('');
+  const [suggestedSpecialty, setSuggestedSpecialty] = useState('General Practice');
+  const [forceEmergency, setForceEmergency] = useState(false);
+  const [showPreVisitChat, setShowPreVisitChat] = useState(false);
   
   const days = useMemo(() => upcomingDays(14), []);
   const [name, setName] = useState(profile?.displayName ?? '');
@@ -74,17 +102,98 @@ export function BookingScreen({ route, navigation }: Props) {
         patientEmail: email.trim(),
         date: days[dayIndex].iso,
         time: slot,
-        reason: reason.trim() || undefined,
+        reason: reason.trim() || symptomText.trim() || undefined,
         // Carry over doctor details if booked from doctor's card
         ...(doctorId ? { doctorId } : {}),
       });
-      navigation.goBack();
+      setShowPreVisitChat(true);
     } catch (e) {
       Alert.alert('Booking failed', firebaseErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
   };
+
+  const handleSymptomSubmit = async (text: string, photos: StagedPhoto[]) => {
+    setCheckState('loading');
+    setReplyState('loading');
+
+    try {
+      const triage = await requestAiTriage({
+        text,
+        localImageUris: photos.map((p) => p.dataUrl ?? p.localUri),
+      });
+
+      if (triage.forceEmergency) {
+        setForceEmergency(true);
+        setCheckState('success');
+        setReplyState(null);
+        return;
+      }
+
+      if (!triage.ok) {
+        setCheckState('error');
+        setReplyState('error');
+        return;
+      }
+
+      const imageNotice = triage.imageFailed
+        ? "I couldn't view your photo, but let's continue. "
+        : '';
+      const statusPrefix = triage.statusNote ? `[${triage.statusNote}] ` : '';
+      setAiReplyText(`${statusPrefix}${imageNotice}${triage.text}`.trim());
+      setSuggestedSpecialty(triage.specialty);
+      if (text && !reason.trim()) {
+        setReason(text);
+      }
+      setCheckState('success');
+      setReplyState('success');
+
+      if (triage.openManualPicker) {
+        scrollRef.current?.scrollTo({ y: 420, animated: true });
+      }
+    } catch {
+      setCheckState('error');
+      setReplyState('error');
+    }
+  };
+
+  const matchedDoctors = useMemo(() => {
+    const target = suggestedSpecialty.toLowerCase();
+    const filtered = doctors.filter((d) =>
+      d.specialty.toLowerCase().includes(target)
+    );
+    const list = filtered.length > 0 ? filtered : doctors.slice(0, 3);
+    return list.slice(0, 3).map((d) => ({
+      id: d.id,
+      name: d.name,
+      specialty: d.specialty,
+      nextSlot: 'Next open slot available',
+      photoURL: d.photoURL,
+    }));
+  }, [doctors, suggestedSpecialty]);
+
+  if (forceEmergency) {
+    return (
+      <AiEmergencyScreen
+        onBackToBooking={() => {
+          setForceEmergency(false);
+          setCheckState('empty');
+        }}
+      />
+    );
+  }
+
+  if (showPreVisitChat) {
+    const bookedDoc = doctors.find((d) => d.id === doctorId);
+    return (
+      <AiPreVisitChat
+        doctorName={bookedDoc?.name ?? 'your doctor'}
+        onComplete={() => navigation.goBack()}
+        onSkip={() => navigation.goBack()}
+      />
+    );
+  }
 
   const renderSlot = (s: string) => {
     const active = slot === s;
@@ -131,12 +240,45 @@ export function BookingScreen({ route, navigation }: Props) {
       </View>
 
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
         <Text variant="displayLg" style={styles.title}>
           Book{'\n'}Appointment
         </Text>
+
+        {/* AI Symptom Check Entry */}
+        <SymptomCheckBar
+          value={symptomText}
+          onChangeText={setSymptomText}
+          photos={symptomPhotos}
+          onPhotosChange={setSymptomPhotos}
+          onSubmit={(t, p) => void handleSymptomSubmit(t, p)}
+          onManualSpecialtyPress={() =>
+            scrollRef.current?.scrollTo({ y: 420, animated: true })
+          }
+          state={checkState}
+          style={{ marginBottom: spacing.lg }}
+        />
+
+        {/* AI Reply & Pre-filtered Doctor Cards */}
+        {replyState && (
+          <AiBubble
+            state={replyState}
+            replyText={aiReplyText}
+            suggestedSpecialty={suggestedSpecialty}
+            doctors={matchedDoctors}
+            onBookDoctor={(id) => {
+              setSelectedDoctorId(id);
+              scrollRef.current?.scrollTo({ y: 520, animated: true });
+            }}
+            onManualSpecialtyPress={() =>
+              scrollRef.current?.scrollTo({ y: 420, animated: true })
+            }
+            style={{ marginBottom: spacing.xl }}
+          />
+        )}
 
         <Text variant="label" style={styles.sectionLabel}>
           Enter Your Details

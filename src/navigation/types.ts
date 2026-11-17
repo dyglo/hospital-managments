@@ -34,6 +34,7 @@ export type PatientStackParamList = {
   ReportDetails: { reportId: string };
   Emergency: undefined;
   EmergencyCreate: undefined;
+  AiAssistant: undefined;
 };
 
 /** Admin bottom-tab routes. */

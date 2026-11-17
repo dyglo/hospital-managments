@@ -73,6 +73,21 @@ export interface Booking {
   doctorSpecialty?: string | null;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
+  // AI-assisted intake & triage fields
+  urgency?: 'Routine' | 'Soon' | 'Urgent';
+  complaintPreview?: string;
+  intakeSummary?: {
+    complaint?: string;
+    duration?: string;
+    severity?: string;
+    medications?: string;
+    allergies?: string;
+    otherConditions?: string;
+    concerns?: string;
+    photos?: string;
+    isUrgentConcern?: boolean;
+    reviewedByDoctor?: boolean;
+  };
 }
 
 /** Payload used when a patient creates a booking. */

@@ -11,6 +11,7 @@ import {
   ReportDetailsScreen,
   EmergencyScreen,
   EmergencyCreateScreen,
+  AiAssistantScreen,
 } from '@/screens/patient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/context/AuthContext';
@@ -96,6 +97,11 @@ export function PatientNavigator() {
       <Stack.Screen
         name="Chat"
         component={ChatScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="AiAssistant"
+        component={AiAssistantScreen}
         options={{ animation: 'slide_from_right' }}
       />
       <Stack.Screen

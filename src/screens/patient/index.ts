@@ -8,5 +8,6 @@ export { ReportsScreen } from './ReportsScreen';
 export { ReportDetailsScreen } from './ReportDetailsScreen';
 export { EmergencyScreen } from './EmergencyScreen';
 export { EmergencyCreateScreen } from './EmergencyCreateScreen';
+export { AiAssistantScreen } from './AiAssistantScreen';
 
 

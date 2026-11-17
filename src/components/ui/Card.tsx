@@ -1,11 +1,11 @@
 import React from 'react';
-import { View, ViewProps, StyleSheet, ViewStyle } from 'react-native';
+import { View, ViewProps, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { colors, radius, spacing, shadows } from '@/theme';
 
 export interface CardProps extends ViewProps {
   padded?: boolean;
   elevation?: keyof typeof shadows;
-  style?: ViewStyle | ViewStyle[];
+  style?: StyleProp<ViewStyle>;
 }
 
 /** White rounded surface with a soft shadow — the core building block of the UI. */

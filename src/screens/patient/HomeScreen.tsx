@@ -88,6 +88,30 @@ export function HomeScreen({ navigation }: Props) {
         </View>
       </View>
 
+      {/* AI Care Assistant entry card */}
+      <View style={styles.section}>
+        <Card style={styles.assistantCard} padded={false}>
+          <Pressable
+            onPress={() => navigation.navigate('AiAssistant')}
+            style={({ pressed }) => [styles.assistantRow, pressed && styles.pressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Talk to Care Assistant"
+          >
+            <View style={styles.assistantIcon}>
+              <Ionicons name="sparkles" size={22} color={colors.primary} />
+            </View>
+            <View style={styles.assistantBody}>
+              <Text variant="h3">Talk to Care Assistant</Text>
+              <Text variant="bodyMuted" style={styles.assistantDesc}>
+                Describe how you feel or share a photo to get guided to the right doctor.
+              </Text>
+              <Text style={styles.assistantFooter}>Guidance only, not a diagnosis.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+          </Pressable>
+        </Card>
+      </View>
+
       {/* Next appointment */}
       <View style={styles.section}>
         <SectionHeader
@@ -136,5 +160,39 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
     ...shadows.sm,
+  },
+  assistantCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  assistantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  assistantIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assistantBody: {
+    flex: 1,
+    gap: 3,
+  },
+  assistantDesc: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  assistantFooter: {
+    fontSize: 12,
+    color: colors.textTertiary,
+    marginTop: 2,
+  },
+  pressed: {
+    opacity: 0.75,
   },
 });

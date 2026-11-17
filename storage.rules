@@ -25,5 +25,20 @@ service firebase.storage {
     match /chats/{bookingId}/{fileName} {
       allow read, write: if request.auth != null;
     }
+
+    // Private AI intake photos: locked to the owning patient and their doctor/admin.
+    // Only JPEG, PNG, and WebP images under 5 MB are accepted.
+    match /ai-intake/{patientId}/{allPaths=**} {
+      allow read: if request.auth != null
+        && (
+          request.auth.uid == patientId
+          || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        );
+      allow write: if request.auth != null
+        && request.auth.uid == patientId
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if request.auth != null && request.auth.uid == patientId;
+    }
   }
 }

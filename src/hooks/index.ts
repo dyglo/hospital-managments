@@ -5,4 +5,5 @@ export { useBooking } from './useBooking';
 export { usePatients } from './usePatients';
 export { usePatientStats } from './usePatientStats';
 export { useBookingNotifications } from './useBookingNotifications';
+export { useKeyboardAvoidance } from './useKeyboardAvoidance';
 

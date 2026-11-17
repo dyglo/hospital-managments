@@ -1,0 +1,25 @@
+{
+  "name": "hospital-ai-functions",
+  "version": "1.0.0",
+  "description": "Server-side Cloud Functions for DeepSeek AI triage, pre-visit chat, and intake summary",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "npm run build && node lib/localServer.js",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  },
+  "private": true
+}

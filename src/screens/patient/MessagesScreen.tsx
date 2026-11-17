@@ -113,11 +113,50 @@ export function MessagesScreen() {
           renderItem={({ item }) => <ThreadItem item={item} navigation={navigation} />}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          ListHeaderComponent={
+            <Card style={styles.assistantCard} padded={false}>
+              <Pressable
+                style={styles.pressable}
+                android_ripple={{ color: colors.border }}
+                onPress={() => navigation.navigate('AiAssistant')}
+                accessibilityRole="button"
+                accessibilityLabel="Open Care Assistant chat"
+              >
+                <View style={styles.assistantIcon}>
+                  <Ionicons name="sparkles" size={22} color={colors.primary} />
+                </View>
+
+                <View style={styles.threadInfo}>
+                  <View style={styles.threadHeader}>
+                    <Text variant="h3" style={styles.recipientName}>
+                      Care Assistant
+                    </Text>
+                    <View style={styles.assistantTag}>
+                      <Text style={styles.assistantTagText}>AI</Text>
+                    </View>
+                  </View>
+                  <Text variant="bodyMuted" style={styles.assistantSubtitle} numberOfLines={2}>
+                    Ask about symptoms, upload a photo, or get help picking a doctor
+                  </Text>
+                  <Text variant="caption" color={colors.textTertiary}>
+                    Guidance only, not a diagnosis
+                  </Text>
+                </View>
+
+                <Ionicons
+                  name="chevron-forward-outline"
+                  size={18}
+                  color={colors.textTertiary}
+                  style={styles.chevron}
+                />
+              </Pressable>
+            </Card>
+          }
           ListEmptyComponent={
             <EmptyState
               icon="chatbubbles-outline"
-              title="No chats available"
-              message="Book an appointment first to initialize a secure chat thread with our care team."
+              title="No doctor chats yet"
+              message="Book an appointment to chat with your doctor, or tap Care Assistant above anytime."
             />
           }
         />
@@ -209,5 +248,34 @@ const styles = StyleSheet.create({
     color: colors.textInverse,
     fontSize: 10,
     fontWeight: '700',
+  },
+  assistantCard: {
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  assistantIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assistantTag: {
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+  },
+  assistantTagText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  assistantSubtitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 2,
   },
 });

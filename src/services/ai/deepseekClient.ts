@@ -5,6 +5,7 @@ import {
   formatAssistantHistoryContent,
   requestDeepSeek,
 } from './deepseek';
+import { WebSearchSource } from './tavily';
 import {
   ALLOWED_SPECIALTIES,
   TriageUrgency,
@@ -34,6 +35,8 @@ export interface TriageResponse {
   imageFailed?: boolean;
   statusNote?: string;
   bookingProposal?: DeepSeekBookingPayload;
+  usedWebSearch?: boolean;
+  sources?: WebSearchSource[];
 }
 
 export interface PreVisitChatResponse {
@@ -45,6 +48,8 @@ export interface PreVisitChatResponse {
   imageFailed?: boolean;
   statusNote?: string;
   bookingProposal?: DeepSeekBookingPayload;
+  usedWebSearch?: boolean;
+  sources?: WebSearchSource[];
 }
 
 export interface DoctorSummaryResponse {
@@ -78,7 +83,9 @@ const SPECIALTY_LIST = ALLOWED_SPECIALTIES.join(', ');
 const JSON_CONTRACT_INSTRUCTIONS = `
 Return ONLY a valid JSON object with this exact shape:
 {
-  "reply": "Helpful assistant response in plain text (no markdown, no emojis)",
+  "search_query": "",
+  "search_preface": "",
+  "reply": "Helpful assistant response in plain text (no markdown, no bullet symbols, no emojis)",
   "risk_level": "LOW",
   "should_book_doctor": false,
   "booking_payload": {
@@ -94,9 +101,12 @@ Rules:
 - "risk_level" MUST be "LOW", "MODERATE", or "HIGH".
 - "should_book_doctor" MUST be a boolean.
 - When "should_book_doctor" is true, "booking_payload" is required and "specialty" MUST be one of: ${SPECIALTY_LIST}. If unsure, use "General Practice".
+- Web Search Tool ("search_query" and "search_preface"):
+  - Whenever the patient asks about specific medical symptoms, health conditions, medications, side effects, lab report values, self-care guidelines, or asks you to verify/search something, set "search_query" to a concise 3 to 8 word medical search query and set "search_preface" to a warm spoken sentence like "Okay! Let me do a quick online search to validate that."
+  - If "[Verified Web Search Results ...]" are already provided in the prompt, or for simple greetings/scheduling acknowledgments, set "search_query" to "" and "search_preface" to "".
 - Never state a definitive medical diagnosis or prescribe specific medication dosages.
 - Clearly treat any booking details as a proposal for the patient to confirm, not a confirmed appointment.
-- Keep "reply" warm, clear, practical, and easy to read (2 to 5 sentences).
+- Keep "reply" warm, clear, natural, and easy to read or speak aloud (2 to 4 clean sentences, plain text only, no markdown formatting or asterisks).
 `.trim();
 
 const TRIAGE_SYSTEM_PROMPT = `
@@ -108,7 +118,7 @@ ${JSON_CONTRACT_INSTRUCTIONS}
 `.trim();
 
 const CARE_ASSISTANT_SYSTEM_PROMPT = `
-You are a warm, knowledgeable, and attentive hospital Care Assistant having a continuous multi-turn conversation with a patient.
+You are a warm, knowledgeable, and attentive hospital Care Assistant having a continuous multi-turn conversation with a patient (via text or voice).
 Always respond directly and helpfully to what the patient just said, asked, or showed in their photo.
 
 Conversation rules:
@@ -116,7 +126,7 @@ Conversation rules:
 - Build naturally on previous turns as the patient shares more details or asks follow-up questions.
 - Do NOT ask generic "what are your symptoms?" questions when the patient already described their issue, asked a specific question, or uploaded a photo.
 - If the patient describes symptoms: acknowledge their specific details, provide practical and reassuring self-care or preparation guidance, explain what to watch for, and ask at most one focused follow-up question only if it helps narrow down care.
-- If the patient asks a follow-up question, general health question, clinic question, or what to expect at their visit: answer it directly, thoroughly, and clearly.
+- If the patient asks a follow-up question, medication/health question, or what to expect at their visit: use the web search tool ("search_query") when medical facts or clinical guidance should be validated, and answer clearly.
 - If the patient attaches a photo: describe what is clearly visible in plain language (for lab reports or prescriptions, read out the visible values/names and explain generally what they measure while noting their doctor will interpret them).
 - If seeing a doctor is appropriate (or if the patient asks for a doctor recommendation or to book an appointment), set "should_book_doctor" to true and set "booking_payload.specialty" to the best match from: ${SPECIALTY_LIST}.
 - If general guidance is enough for the current turn, set "should_book_doctor" to false.
@@ -137,7 +147,9 @@ async function requestWithImageFallback(params: {
   history?: DeepSeekHistoryMessage[];
   userText: string;
   localImageUris?: string[];
+  enableWebSearch?: boolean;
   onNotice?: (notice: string) => void;
+  onSearchStart?: (info: { query: string; spokenPreface: string }) => void;
 }) {
   let imageDataUrl: string | undefined;
   let imageFailed = false;
@@ -155,19 +167,22 @@ async function requestWithImageFallback(params: {
       history: params.history,
       userText: params.userText,
       imageDataUrl,
+      enableWebSearch: params.enableWebSearch,
+      onSearchStart: params.onSearchStart,
     });
     if (imageFailed) {
       params.onNotice?.("I couldn't view your photo, but let's continue.");
     }
     return { decision, imageFailed };
   } catch (error) {
-    // If an image was attached and the model/endpoint rejected it, retry text-only once.
     if (imageDataUrl) {
       try {
         const decision = await requestDeepSeek({
           systemPrompt: params.systemPrompt,
           history: params.history,
           userText: params.userText,
+          enableWebSearch: params.enableWebSearch,
+          onSearchStart: params.onSearchStart,
         });
         imageFailed = true;
         params.onNotice?.("I couldn't view your photo, but let's continue.");
@@ -181,13 +196,14 @@ async function requestWithImageFallback(params: {
 }
 
 /**
- * Triages patient symptoms using the DeepSeek chat-completions API.
+ * Triages patient symptoms using the DeepSeek chat-completions API + Tavily web search tool.
  */
 export async function requestAiTriage(params: {
   text: string;
   imagePaths?: string[];
   localImageUris?: string[];
   onNotice?: (notice: string) => void;
+  onSearchStart?: (info: { query: string; spokenPreface: string }) => void;
 }): Promise<TriageResponse> {
   const userText = params.text.trim() || 'Please review my attached photo.';
 
@@ -195,7 +211,9 @@ export async function requestAiTriage(params: {
     systemPrompt: TRIAGE_SYSTEM_PROMPT,
     userText,
     localImageUris: params.localImageUris,
+    enableWebSearch: true,
     onNotice: params.onNotice,
+    onSearchStart: params.onSearchStart,
   });
 
   const specialty = normalizeSpecialty(decision.booking_payload?.specialty);
@@ -210,11 +228,13 @@ export async function requestAiTriage(params: {
     imageFailed,
     statusNote: '',
     bookingProposal: decision.booking_payload,
+    usedWebSearch: decision.used_web_search,
+    sources: decision.sources,
   };
 }
 
 /**
- * Care Assistant / Pre-Visit chat backed by DeepSeek across multi-turn conversations.
+ * Care Assistant / Pre-Visit chat backed by DeepSeek + Tavily web search across multi-turn conversations.
  */
 export async function requestPreVisitChat(params: {
   messages: ChatTurnInput[];
@@ -223,6 +243,7 @@ export async function requestPreVisitChat(params: {
   mode?: 'general' | 'previsit';
   onDelta?: (partialText: string) => void;
   onNotice?: (notice: string) => void;
+  onSearchStart?: (info: { query: string; spokenPreface: string }) => void;
 }): Promise<PreVisitChatResponse> {
   const allMessages = params.messages.filter(
     (m) => !m.isNotice && typeof m.text === 'string' && m.text.trim().length > 0
@@ -230,7 +251,6 @@ export async function requestPreVisitChat(params: {
   const lastUserMsg = [...allMessages].reverse().find((m) => m.role === 'user');
   const userText = lastUserMsg?.text?.trim() || 'Attached photo(s)';
 
-  // Exclude the current user message from history and keep up to the last 20 non-empty messages.
   const lastIdx = lastUserMsg ? allMessages.lastIndexOf(lastUserMsg) : -1;
   const priorMessages = lastIdx > 0 ? allMessages.slice(0, lastIdx) : [];
 
@@ -250,6 +270,8 @@ export async function requestPreVisitChat(params: {
           : 'General Practice';
 
         const structuredJson = JSON.stringify({
+          search_query: '',
+          search_preface: '',
           reply: cleanText,
           risk_level: m.riskLevel ?? 'LOW',
           should_book_doctor: shouldBook,
@@ -283,7 +305,9 @@ export async function requestPreVisitChat(params: {
     history,
     userText,
     localImageUris: params.localImageUris,
+    enableWebSearch: params.mode !== 'previsit',
     onNotice: params.onNotice,
+    onSearchStart: params.onSearchStart,
   });
 
   const recommendedSpecialty = decision.should_book_doctor
@@ -301,6 +325,8 @@ export async function requestPreVisitChat(params: {
     imageFailed,
     statusNote: '',
     bookingProposal: decision.booking_payload,
+    usedWebSearch: decision.used_web_search,
+    sources: decision.sources,
   };
 }
 
@@ -324,6 +350,7 @@ ${JSON_CONTRACT_INSTRUCTIONS}
       systemPrompt,
       userText: params.transcript,
       localImageUris: params.localImageUris,
+      enableWebSearch: false,
     });
 
     return {

@@ -1,3 +1,5 @@
+import { WebSearchSource, isTavilyConfigured, searchTavily } from './tavily';
+
 export type DeepSeekRiskLevel = 'LOW' | 'MODERATE' | 'HIGH';
 
 export interface DeepSeekBookingPayload {
@@ -13,6 +15,10 @@ export interface DeepSeekDecision {
   risk_level: DeepSeekRiskLevel;
   should_book_doctor: boolean;
   booking_payload?: DeepSeekBookingPayload;
+  search_query?: string;
+  search_preface?: string;
+  used_web_search?: boolean;
+  sources?: WebSearchSource[];
 }
 
 export interface DeepSeekHistoryMessage {
@@ -26,6 +32,8 @@ export interface RequestDeepSeekParams {
   userText: string;
   imageDataUrl?: string;
   maxTokens?: number;
+  enableWebSearch?: boolean;
+  onSearchStart?: (info: { query: string; spokenPreface: string }) => void;
 }
 
 interface RawDeepSeekChoice {
@@ -96,6 +104,8 @@ export function formatAssistantHistoryContent(content: string): string {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       if (typeof parsed.reply === 'string' && parsed.reply.trim()) {
         return JSON.stringify({
+          search_query: '',
+          search_preface: '',
           reply: parsed.reply.trim(),
           risk_level: normalizeRiskLevel(parsed.risk_level),
           should_book_doctor: Boolean(parsed.should_book_doctor),
@@ -119,6 +129,8 @@ export function formatAssistantHistoryContent(content: string): string {
   }
 
   return JSON.stringify({
+    search_query: '',
+    search_preface: '',
     reply: trimmed,
     risk_level: 'LOW',
     should_book_doctor: false,
@@ -180,8 +192,6 @@ export function sanitizeConversationHistory(
     filtered.shift();
   }
 
-  // If the last message in prior history is a dangling user message (e.g. from a failed turn),
-  // drop it or let the caller's current user message take precedence.
   while (filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
     filtered.pop();
   }
@@ -265,6 +275,8 @@ function recoverTruncatedJsonDecision(text: string): DeepSeekDecision | null {
 
   if (!decodedReply.trim()) return null;
 
+  const searchQueryMatch = text.match(/"search_query"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+  const searchPrefaceMatch = text.match(/"search_preface"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
   const riskMatch = text.match(/"risk_level"\s*:\s*"(LOW|MODERATE|HIGH)"/i);
   const bookMatch = text.match(/"should_book_doctor"\s*:\s*(true|false)/i);
   const specialtyMatch = text.match(/"specialty"\s*:\s*"([^"]+)"/i);
@@ -278,6 +290,8 @@ function recoverTruncatedJsonDecision(text: string): DeepSeekDecision | null {
     reply: decodedReply.trim(),
     risk_level: normalizeRiskLevel(riskMatch?.[1]),
     should_book_doctor,
+    search_query: searchQueryMatch?.[1]?.trim() || undefined,
+    search_preface: searchPrefaceMatch?.[1]?.trim() || undefined,
     booking_payload: should_book_doctor
       ? {
           specialty,
@@ -318,7 +332,12 @@ export function parseDecision(content: string): DeepSeekDecision {
         ? raw.answer
         : '';
 
-    if (!replyCandidate.trim()) {
+    const searchQuery =
+      typeof raw.search_query === 'string' ? raw.search_query.trim() : '';
+    const searchPreface =
+      typeof raw.search_preface === 'string' ? raw.search_preface.trim() : '';
+
+    if (!replyCandidate.trim() && !searchQuery) {
       throw new Error('DeepSeek returned a JSON object without a non-empty "reply" field.');
     }
 
@@ -334,19 +353,21 @@ export function parseDecision(content: string): DeepSeekDecision {
         : undefined;
 
     return {
-      reply: replyCandidate.trim(),
+      reply:
+        replyCandidate.trim() ||
+        'Let me check reliable medical sources to give you accurate guidance.',
       risk_level,
       should_book_doctor,
       booking_payload,
+      search_query: searchQuery || undefined,
+      search_preface: searchPreface || undefined,
     };
   } catch (parseErr) {
-    // 1. Try recovering fields if it was a truncated JSON object
     const recovered = recoverTruncatedJsonDecision(trimmed);
     if (recovered) {
       return recovered;
     }
 
-    // 2. If the model responded with plain text (not broken JSON), use it directly as the reply
     if (!trimmed.startsWith('{')) {
       const cleanPlain = trimmed
         .replace(/^```(?:json)?\s*/i, '')
@@ -367,25 +388,17 @@ export function parseDecision(content: string): DeepSeekDecision {
   }
 }
 
-export async function requestDeepSeek({
-  systemPrompt,
-  history = [],
-  userText,
-  imageDataUrl,
-  maxTokens = DEFAULT_MAX_TOKENS,
-}: RequestDeepSeekParams): Promise<DeepSeekDecision> {
-  if (!API_KEY.trim()) {
-    throw new Error('DeepSeek API key is not configured.');
-  }
-
-  const userContent = imageDataUrl
-    ? [
-        { type: 'text' as const, text: userText },
-        { type: 'image_url' as const, image_url: { url: imageDataUrl } },
-      ]
-    : userText;
-
-  const sanitizedHistory = sanitizeConversationHistory(history);
+async function executeSingleDeepSeekCall(params: {
+  systemPrompt: string;
+  sanitizedHistory: DeepSeekHistoryMessage[];
+  userContent:
+    | string
+    | Array<
+        | { type: 'text'; text: string }
+        | { type: 'image_url'; image_url: { url: string } }
+      >;
+  maxTokens: number;
+}): Promise<DeepSeekDecision> {
   const endpoint = `${BASE_URL.replace(/\/+$/, '')}/chat/completions`;
 
   const attempts: Array<{
@@ -396,12 +409,12 @@ export async function requestDeepSeek({
     {
       useJsonObject: true,
       useThinkingDisabled: true,
-      maxTokens,
+      maxTokens: params.maxTokens,
     },
     {
       useJsonObject: false,
       useThinkingDisabled: true,
-      maxTokens: Math.max(maxTokens, RETRY_MAX_TOKENS),
+      maxTokens: Math.max(params.maxTokens, RETRY_MAX_TOKENS),
     },
   ];
 
@@ -416,9 +429,9 @@ export async function requestDeepSeek({
       const requestBody: Record<string, unknown> = {
         model: MODEL,
         messages: [
-          { role: 'system', content: systemPrompt },
-          ...sanitizedHistory,
-          { role: 'user', content: userContent },
+          { role: 'system', content: params.systemPrompt },
+          ...params.sanitizedHistory,
+          { role: 'user', content: params.userContent },
         ],
         max_tokens: cfg.maxTokens,
       };
@@ -457,8 +470,6 @@ export async function requestDeepSeek({
           `[DeepSeek] HTTP ${response.status} on attempt ${attemptIdx + 1}/${attempts.length} (model=${MODEL}): ${apiErrorMsg}`
         );
 
-        // If 400 Bad Request on attempt 1 (e.g. unsupported `thinking` or `response_format`),
-        // allow attempt 2 without `thinking` and `response_format`.
         if (response.status === 400 && attemptIdx === 0) {
           attempts[1].useThinkingDisabled = false;
           lastError = new Error(
@@ -498,10 +509,9 @@ export async function requestDeepSeek({
           `[DeepSeek] Empty or whitespace-only content on attempt ${attemptIdx + 1}/${attempts.length}: ` +
             `finish_reason=${finishReason}, raw_content_len=${rawContent.length}, ` +
             `reasoning_len=${reasoningContent.length}, completion_tokens=${data?.usage?.completion_tokens ?? 'n/a'}, ` +
-            `history_turns=${sanitizedHistory.length}`
+            `history_turns=${params.sanitizedHistory.length}`
         );
 
-        // If reasoning_content contains usable output when content is empty, try parsing it
         if (reasoningContent && reasoningContent.trim()) {
           try {
             return parseDecision(reasoningContent);
@@ -560,4 +570,87 @@ export async function requestDeepSeek({
   }
 
   throw lastError ?? new Error('DeepSeek request failed.');
+}
+
+export async function requestDeepSeek({
+  systemPrompt,
+  history = [],
+  userText,
+  imageDataUrl,
+  maxTokens = DEFAULT_MAX_TOKENS,
+  enableWebSearch = true,
+  onSearchStart,
+}: RequestDeepSeekParams): Promise<DeepSeekDecision> {
+  if (!API_KEY.trim()) {
+    throw new Error('DeepSeek API key is not configured.');
+  }
+
+  const userContent = imageDataUrl
+    ? [
+        { type: 'text' as const, text: userText },
+        { type: 'image_url' as const, image_url: { url: imageDataUrl } },
+      ]
+    : userText;
+
+  const sanitizedHistory = sanitizeConversationHistory(history);
+
+  const firstDecision = await executeSingleDeepSeekCall({
+    systemPrompt,
+    sanitizedHistory,
+    userContent,
+    maxTokens,
+  });
+
+  const searchQuery = firstDecision.search_query?.trim() || '';
+  if (!enableWebSearch || !searchQuery || !isTavilyConfigured()) {
+    return firstDecision;
+  }
+
+  const spokenPreface =
+    firstDecision.search_preface?.trim() ||
+    'Okay! Let me do a quick online search to validate that.';
+
+  onSearchStart?.({
+    query: searchQuery,
+    spokenPreface,
+  });
+
+  const searchResult = await searchTavily(searchQuery);
+  if (!searchResult) {
+    return firstDecision;
+  }
+
+  const groundedPrompt = `${userText}\n\n[Verified Web Search Results for "${searchResult.query}"]\n${searchResult.formattedContext}\n\nInstruction: Use these verified web search findings to give a clear, accurate, reassuring response to the patient. Set "search_query" to "" in your JSON reply.`;
+
+  const groundedUserContent = imageDataUrl
+    ? [
+        { type: 'text' as const, text: groundedPrompt },
+        { type: 'image_url' as const, image_url: { url: imageDataUrl } },
+      ]
+    : groundedPrompt;
+
+  try {
+    const finalDecision = await executeSingleDeepSeekCall({
+      systemPrompt,
+      sanitizedHistory,
+      userContent: groundedUserContent,
+      maxTokens,
+    });
+
+    return {
+      ...finalDecision,
+      used_web_search: true,
+      sources: searchResult.sources,
+    };
+  } catch (err) {
+    console.warn(
+      '[DeepSeek] Grounded synthesis call failed, returning initial decision:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return {
+      ...firstDecision,
+      used_web_search: true,
+      sources: searchResult.sources,
+    };
+  }
 }

@@ -12,6 +12,7 @@ import {
   AiReplyState,
   AiEmergencyScreen,
   AiPreVisitChat,
+  AiVoiceAssistantModal,
 } from '@/components/ai';
 import { colors, radius, spacing, shadows } from '@/theme';
 import { useAuth } from '@/context/AuthContext';
@@ -49,6 +50,8 @@ export function BookingScreen({ route, navigation }: Props) {
   const [suggestedSpecialty, setSuggestedSpecialty] = useState('General Practice');
   const [forceEmergency, setForceEmergency] = useState(false);
   const [showPreVisitChat, setShowPreVisitChat] = useState(false);
+  const [searchingWebQuery, setSearchingWebQuery] = useState<string | null>(null);
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   
   const days = useMemo(() => upcomingDays(14), []);
   const [name, setName] = useState(profile?.displayName ?? '');
@@ -117,12 +120,17 @@ export function BookingScreen({ route, navigation }: Props) {
   const handleSymptomSubmit = async (text: string, photos: StagedPhoto[]) => {
     setCheckState('loading');
     setReplyState('loading');
+    setSearchingWebQuery(null);
 
     try {
       const triage = await requestAiTriage({
         text,
         localImageUris: photos.map((p) => p.dataUrl ?? p.localUri),
+        onSearchStart: ({ query }) => {
+          setSearchingWebQuery(query);
+        },
       });
+      setSearchingWebQuery(null);
 
       if (triage.forceEmergency) {
         setForceEmergency(true);
@@ -255,12 +263,22 @@ export function BookingScreen({ route, navigation }: Props) {
           photos={symptomPhotos}
           onPhotosChange={setSymptomPhotos}
           onSubmit={(t, p) => void handleSymptomSubmit(t, p)}
+          onVoiceInputPress={() => setVoiceModalOpen(true)}
           onManualSpecialtyPress={() =>
             scrollRef.current?.scrollTo({ y: 420, animated: true })
           }
           state={checkState}
           style={{ marginBottom: spacing.lg }}
         />
+
+        {searchingWebQuery && replyState === 'loading' && (
+          <View style={styles.searchingBanner}>
+            <Ionicons name="globe-outline" size={16} color={colors.info} />
+            <Text style={styles.searchingBannerText} numberOfLines={1}>
+              Searching the web: {searchingWebQuery}
+            </Text>
+          </View>
+        )}
 
         {/* AI Reply & Pre-filtered Doctor Cards */}
         {replyState && (
@@ -378,6 +396,34 @@ export function BookingScreen({ route, navigation }: Props) {
           onPress={onBook}
         />
       </View>
+
+      <AiVoiceAssistantModal
+        visible={voiceModalOpen}
+        onClose={() => setVoiceModalOpen(false)}
+        history={[]}
+        doctors={doctors.map((d) => ({
+          id: d.id,
+          name: d.name,
+          specialty: d.specialty,
+          photoURL: d.photoURL,
+        }))}
+        onTurnCompleted={(turn) => {
+          setSymptomText(turn.userText);
+          if (!reason.trim()) {
+            setReason(turn.userText);
+          }
+          setAiReplyText(turn.assistantText);
+          if (turn.recommendedSpecialty) {
+            setSuggestedSpecialty(turn.recommendedSpecialty);
+          }
+          setCheckState('success');
+          setReplyState('success');
+        }}
+        onBookDoctor={(id) => {
+          setSelectedDoctorId(id);
+          scrollRef.current?.scrollTo({ y: 520, animated: true });
+        }}
+      />
     </Screen>
   );
 }
@@ -471,5 +517,21 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
     backgroundColor: colors.background,
+  },
+  searchingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.infoSoft,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    marginBottom: spacing.md,
+  },
+  searchingBannerText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.info,
+    flex: 1,
   },
 });

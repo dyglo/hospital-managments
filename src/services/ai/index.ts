@@ -7,6 +7,20 @@ export {
 export type { StagedPhoto, PickPhotoResult } from './imageUpload';
 
 export {
+  searchTavily,
+  isTavilyConfigured,
+} from './tavily';
+export type { WebSearchSource, TavilySearchResult } from './tavily';
+
+export {
+  isElevenLabsConfigured,
+  cleanTextForSpeech,
+  synthesizeAndPlaySpeech,
+  stopSpeech,
+  transcribeAudioUri,
+} from './elevenlabs';
+
+export {
   requestDeepSeek,
   parseDecision,
   isDeepSeekConfigured,

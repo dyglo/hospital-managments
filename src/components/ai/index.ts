@@ -18,3 +18,11 @@ export type { AiIntakeSummaryCardProps, IntakeData, IntakeSummaryState } from '.
 
 export { UrgencyTag } from './UrgencyTag';
 export type { UrgencyTagProps, UrgencyLevel } from './UrgencyTag';
+
+export { AiVoiceAssistantModal } from './AiVoiceAssistantModal';
+export type {
+  AiVoiceAssistantModalProps,
+  VoiceAssistantPhase,
+  VoiceDoctorItem,
+  VoiceTurnResult,
+} from './AiVoiceAssistantModal';

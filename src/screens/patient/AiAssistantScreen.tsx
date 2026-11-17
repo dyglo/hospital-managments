@@ -13,12 +13,13 @@ import {
   Platform,
   ActionSheetIOS,
   Alert,
+  Linking,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Screen, Text, IconButton } from '@/components/ui';
-import { AiDoctorCard } from '@/components/ai';
+import { AiDoctorCard, AiVoiceAssistantModal } from '@/components/ai';
 import { colors, radius, spacing, shadows } from '@/theme';
 import { useDoctors, useKeyboardAvoidance } from '@/hooks';
 import { PatientStackParamList } from '@/navigation/types';
@@ -26,8 +27,11 @@ import {
   DeepSeekBookingPayload,
   MAX_ATTACHMENTS,
   StagedPhoto,
+  WebSearchSource,
   pickAndPreparePhoto,
   requestPreVisitChat,
+  stopSpeech,
+  synthesizeAndPlaySpeech,
 } from '@/services/ai';
 
 type Props = NativeStackScreenProps<PatientStackParamList, 'AiAssistant'>;
@@ -40,6 +44,9 @@ interface ChatEntry {
   recommendedSpecialty?: string | null;
   bookingProposal?: DeepSeekBookingPayload;
   isNotice?: boolean;
+  isSearchingWeb?: boolean;
+  searchQuery?: string;
+  sources?: WebSearchSource[];
 }
 
 const STARTER_CHIPS = [
@@ -87,6 +94,43 @@ function TypingDots() {
   );
 }
 
+function SearchingWebIndicator({ query }: { query?: string }) {
+  const pulse = useRef(new Animated.Value(0.45)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 550,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0.45,
+          duration: 550,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  return (
+    <Animated.View style={[styles.searchingRow, { opacity: pulse }]}>
+      <Ionicons name="globe-outline" size={16} color={colors.info} />
+      <View style={styles.searchingTextBlock}>
+        <Text style={styles.searchingTitle}>Searching the web...</Text>
+        {query ? (
+          <Text style={styles.searchingQuery} numberOfLines={1}>
+            {query}
+          </Text>
+        ) : null}
+      </View>
+    </Animated.View>
+  );
+}
+
 export function AiAssistantScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const { doctors } = useDoctors();
@@ -105,6 +149,8 @@ export function AiAssistantScreen({ navigation }: Props) {
   const [pickingPhoto, setPickingPhoto] = useState(false);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [apiStatusNote, setApiStatusNote] = useState('');
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
   const {
     keyboardVisible,
     androidPaddingBottom,
@@ -205,10 +251,21 @@ export function AiAssistantScreen({ navigation }: Props) {
         messages: apiMessages,
         localImageUris: photosToUpload.map((p) => p.dataUrl ?? p.localUri),
         mode: 'general',
+        onSearchStart: ({ query }) => {
+          setMessages((prev) =>
+            prev.map((item) =>
+              item.id === assistantId
+                ? { ...item, isSearchingWeb: true, searchQuery: query }
+                : item
+            )
+          );
+        },
         onDelta: (partial) => {
           setMessages((prev) =>
             prev.map((item) =>
-              item.id === assistantId ? { ...item, text: partial } : item
+              item.id === assistantId
+                ? { ...item, isSearchingWeb: false, text: partial }
+                : item
             )
           );
         },
@@ -227,6 +284,9 @@ export function AiAssistantScreen({ navigation }: Props) {
             ? {
                 ...item,
                 text: finalText,
+                isSearchingWeb: false,
+                searchQuery: undefined,
+                sources: reply.sources,
                 recommendedSpecialty: reply.recommendedSpecialty ?? null,
                 bookingProposal: reply.bookingProposal,
                 isNotice: false,
@@ -246,6 +306,7 @@ export function AiAssistantScreen({ navigation }: Props) {
             ? {
                 ...item,
                 text: "We couldn't check that right now. You can try again or book a doctor directly.",
+                isSearchingWeb: false,
                 isNotice: true,
               }
             : item
@@ -254,6 +315,22 @@ export function AiAssistantScreen({ navigation }: Props) {
     } finally {
       setSending(false);
     }
+  };
+
+  const handleToggleSpeakMessage = (entry: ChatEntry) => {
+    if (speakingId === entry.id) {
+      stopSpeech();
+      setSpeakingId(null);
+      return;
+    }
+    setSpeakingId(entry.id);
+    void synthesizeAndPlaySpeech(entry.text, {
+      onFinish: () => {
+        setSpeakingId((curr) => (curr === entry.id ? null : curr));
+      },
+    }).catch(() => {
+      setSpeakingId(null);
+    });
   };
 
   return (
@@ -338,11 +415,37 @@ export function AiAssistantScreen({ navigation }: Props) {
                     >
                       {item.text}
                     </Text>
+                  ) : item.isSearchingWeb ? (
+                    <SearchingWebIndicator query={item.searchQuery} />
                   ) : (
                     <TypingDots />
                   )}
 
-                  {!isUser && (
+                  {!isUser && item.sources && item.sources.length > 0 && (
+                    <View style={styles.sourcesWrap}>
+                      {item.sources.map((src, idx) => (
+                        <Pressable
+                          key={`${src.url}_${idx}`}
+                          onPress={() => void Linking.openURL(src.url).catch(() => {})}
+                          style={({ pressed }) => [
+                            styles.sourceChip,
+                            pressed && styles.pressed,
+                          ]}
+                        >
+                          <Ionicons
+                            name="globe-outline"
+                            size={12}
+                            color={colors.info}
+                          />
+                          <Text style={styles.sourceChipText} numberOfLines={1}>
+                            {src.title}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+
+                  {!isUser && item.text ? (
                     <View style={styles.disclaimerRow}>
                       <Ionicons
                         name="information-circle-outline"
@@ -352,8 +455,35 @@ export function AiAssistantScreen({ navigation }: Props) {
                       <Text style={styles.disclaimerText}>
                         Guidance only, not a diagnosis.
                       </Text>
+                      <Pressable
+                        onPress={() => handleToggleSpeakMessage(item)}
+                        style={({ pressed }) => [
+                          styles.speakBtn,
+                          pressed && styles.pressed,
+                        ]}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          speakingId === item.id
+                            ? 'Stop speaking'
+                            : 'Listen to response'
+                        }
+                      >
+                        <Ionicons
+                          name={
+                            speakingId === item.id
+                              ? 'stop-circle-outline'
+                              : 'volume-medium-outline'
+                          }
+                          size={15}
+                          color={colors.primary}
+                        />
+                        <Text style={styles.speakBtnText}>
+                          {speakingId === item.id ? 'Stop' : 'Listen'}
+                        </Text>
+                      </Pressable>
                     </View>
-                  )}
+                  ) : null}
                 </View>
 
                 {!isUser && item.recommendedSpecialty ? (
@@ -497,6 +627,24 @@ export function AiAssistantScreen({ navigation }: Props) {
           />
 
           <Pressable
+            onPress={() => {
+              stopSpeech();
+              setSpeakingId(null);
+              setVoiceModalOpen(true);
+            }}
+            disabled={sending}
+            style={({ pressed }) => [
+              styles.composerIconBtn,
+              styles.voiceBtn,
+              pressed && styles.pressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Open Voice Assistant"
+          >
+            <Ionicons name="mic-outline" size={22} color={colors.primary} />
+          </Pressable>
+
+          <Pressable
             onPress={() => void handleSend()}
             disabled={(!inputText.trim() && stagedPhotos.length === 0) || sending}
             style={({ pressed }) => [
@@ -512,6 +660,48 @@ export function AiAssistantScreen({ navigation }: Props) {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      <AiVoiceAssistantModal
+        visible={voiceModalOpen}
+        onClose={() => setVoiceModalOpen(false)}
+        history={messages
+          .filter((m) => m.id !== 'welcome' && !m.isNotice && m.text.trim().length > 0)
+          .map((m) => ({
+            role: m.role,
+            text: m.text,
+            recommendedSpecialty: m.recommendedSpecialty,
+            shouldBookDoctor: Boolean(m.recommendedSpecialty),
+            bookingProposal: m.bookingProposal,
+          }))}
+        doctors={doctors.map((d) => ({
+          id: d.id,
+          name: d.name,
+          specialty: d.specialty,
+          photoURL: d.photoURL,
+        }))}
+        onTurnCompleted={(turn) => {
+          const ts = Date.now();
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `vu_${ts}`,
+              role: 'user',
+              text: turn.userText,
+            },
+            {
+              id: `va_${ts}`,
+              role: 'assistant',
+              text: turn.assistantText,
+              recommendedSpecialty: turn.recommendedSpecialty ?? null,
+              bookingProposal: turn.bookingProposal,
+              sources: turn.sources,
+            },
+          ]);
+        }}
+        onBookDoctor={(docId) => {
+          navigation.navigate('Booking', { doctorId: docId });
+        }}
+      />
     </Screen>
   );
 }
@@ -639,6 +829,63 @@ const styles = StyleSheet.create({
   disclaimerText: {
     fontSize: 12,
     color: colors.textSecondary,
+    flex: 1,
+  },
+  speakBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primarySoft,
+  },
+  speakBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  searchingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: 4,
+  },
+  searchingTextBlock: {
+    flexShrink: 1,
+  },
+  searchingTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.info,
+  },
+  searchingQuery: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  sourcesWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  sourceChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.infoSoft,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    maxWidth: '100%',
+  },
+  sourceChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.info,
+    flexShrink: 1,
+  },
+  voiceBtn: {
+    backgroundColor: colors.primarySoft,
   },
   starterContainer: {
     marginTop: spacing.md,
